@@ -14,12 +14,16 @@ DIST="$ROOT/dist"
 echo "==> swift build -c release (universal: arm64 + x86_64)"
 swift build -c release --arch arm64 --arch x86_64
 
-BIN="$(find "$ROOT/.build" -type f -name "$APP_NAME" | head -n1)"
-if [ -z "$BIN" ]; then
+BIN="$ROOT/.build/apple/Products/Release/$APP_NAME"
+if [ ! -f "$BIN" ]; then BIN="$ROOT/.build/release/$APP_NAME"; fi
+if [ ! -f "$BIN" ]; then
+  BIN="$(find "$ROOT/.build" -type f -name "$APP_NAME" | head -n1)"
+fi
+if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
   echo "!! could not locate built binary" >&2
   exit 1
 fi
-echo "==> binary: $BIN"
+echo "==> binary: $BIN ($(file "$BIN" 2>/dev/null || echo unknown))"
 
 APP="$DIST/$APP_NAME.app"
 rm -rf "$DIST"

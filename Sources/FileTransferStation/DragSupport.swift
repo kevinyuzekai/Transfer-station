@@ -19,7 +19,7 @@ final class BallHostingView: NSHostingView<BallView> {
     var onDrop: (([URL]) -> Void)?
     var onHover: ((Bool) -> Void)?
 
-    override init(rootView: BallView) {
+    required init(rootView: BallView) {
         super.init(rootView: rootView)
         registerForDraggedTypes([.fileURL])
     }

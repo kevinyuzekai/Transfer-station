@@ -23,7 +23,7 @@ final class HotKeyManager {
             return noErr
         }, 1, &eventType, selfPtr, &handlerRef)
 
-        var hotKeyID = EventHotKeyID(signature: OSType(0x46545331), id: 1) // 'FTS1'
+        let hotKeyID = EventHotKeyID(signature: OSType(0x46545331), id: 1) // 'FTS1'
         RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
     }
 }
