@@ -34,7 +34,9 @@ hdiutil create -volname "$DISPLAY_NAME" -srcfolder "$STAGE" -ov -format UDRW "$R
 
 echo "==> arrange window"
 mkdir -p "$MOUNT"
-if hdiutil attach "$RW_DMG" -mountpoint "$MOUNT" -nobrowse -noautoopen >/dev/null; then
+# 注意：不能加 -nobrowse，否则 Finder 看不到该卷，AppleScript 无法按名称定位磁盘。
+if hdiutil attach "$RW_DMG" -mountpoint "$MOUNT" -noautoopen >/dev/null; then
+  sleep 2
   BG="$ROOT/assets/dmg-background.png"
   BG2X="$ROOT/assets/dmg-background@2x.png"
   if [ -f "$BG" ]; then
