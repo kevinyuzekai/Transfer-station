@@ -9,16 +9,22 @@ final class AppModel: ObservableObject {
     @Published var clips: [Item] = []
     @Published var settings: Settings = Settings()
     @Published var mode: UIMode = .collapsed
+    /// 当前预览的条目（图片大图 / 文本全文）。
+    @Published var previewItem: Item?
+    /// 悬浮球旁的瞬时反馈文案。
+    @Published var toast: String?
 
     // Hooks wired up by AppDelegate for platform side effects.
     var onDidWritePasteboard: (() -> Void)?
     var onResetBall: (() -> Void)?
     var onAutoLaunchChange: (() -> Void)?
+    var onHotKeyChanged: (() -> Void)?
 
     private let baseDir: URL
     private let imagesDir: URL
     private let dataURL: URL
     private var persisted = PersistedData()
+    private var toastWorkItem: DispatchWorkItem?
 
     init() {
         let fm = FileManager.default
@@ -47,8 +53,27 @@ final class AppModel: ObservableObject {
         persisted.clips = clips
         persisted.settings = settings
         guard let data = try? JSONEncoder().encode(persisted) else { return }
-        try? data.write(to: dataURL, options: .atomic)
+        do {
+            try data.write(to: dataURL, options: .atomic)
+        } catch {
+            NSLog("FileTransferStation: persist failed: \(error.localizedDescription)")
+        }
     }
+
+    // MARK: - Toast feedback
+
+    func showToast(_ message: String) {
+        toast = message
+        toastWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.toast = nil }
+        toastWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.9, execute: work)
+    }
+
+    // MARK: - Preview
+
+    func openPreview(_ item: Item) { previewItem = item }
+    func closePreview() { previewItem = nil }
 
     // MARK: - Ball position
 
@@ -67,6 +92,7 @@ final class AppModel: ObservableObject {
 
     /// F2 · 拖入暂存：只记录路径引用，同一路径去重。
     func addFilesToShelf(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
         for url in urls {
             let path = url.path
             let key = "file:" + path
@@ -91,23 +117,27 @@ final class AppModel: ObservableObject {
             }
         }
         persist()
+        showToast("已暂存 \(urls.count) 个文件")
     }
 
     func togglePinShelf(_ item: Item) {
         guard let idx = shelf.firstIndex(where: { $0.id == item.id }) else { return }
         shelf[idx].pinned.toggle()
         persist()
+        showToast(shelf[idx].pinned ? "已置顶" : "已取消置顶")
     }
 
     func removeShelf(_ item: Item) {
         shelf.removeAll { $0.id == item.id }
         persist()
+        showToast("已移出中转站（原文件未删除）")
     }
 
     /// F10 · 清空中转站（不删除任何原文件）。
     func clearShelf() {
         shelf.removeAll()
         persist()
+        showToast("已清空中转站")
     }
 
     /// F6 · 重新定位失效文件。
@@ -125,11 +155,16 @@ final class AppModel: ObservableObject {
         shelf[idx].name = url.lastPathComponent
         shelf[idx].dedupKey = "file:" + url.path
         persist()
+        showToast("已重新定位并恢复可用")
     }
 
     func reveal(_ item: Item) {
-        guard let url = item.url, FileManager.default.fileExists(atPath: url.path) else { return }
+        guard let url = item.url, FileManager.default.fileExists(atPath: url.path) else {
+            showToast("原文件已不存在，无法定位")
+            return
+        }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+        showToast("已在访达中定位原文件")
     }
 
     /// F5 · 拖出到目标目录（默认复制）。
@@ -138,7 +173,10 @@ final class AppModel: ObservableObject {
     func moveOut(_ item: Item) { transfer(item, move: true) }
 
     private func transfer(_ item: Item, move: Bool) {
-        guard let src = item.url, FileManager.default.fileExists(atPath: src.path) else { return }
+        guard let src = item.url, FileManager.default.fileExists(atPath: src.path) else {
+            showToast("原文件已不存在，无法\(move ? "移动" : "复制")")
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -146,23 +184,26 @@ final class AppModel: ObservableObject {
         panel.prompt = move ? "移动至此" : "复制至此"
         panel.message = "选择目标文件夹"
         guard panel.runModal() == .OK, let dir = panel.url else { return }
+
         var dest = dir.appendingPathComponent(src.lastPathComponent)
         if !move && FileManager.default.fileExists(atPath: dest.path) {
-            dest = uniqueURL(dest)
+            dest = Self.uniqueURL(dest)
         }
         do {
             if move {
                 try FileManager.default.moveItem(at: src, to: dest)
                 removeShelf(item)
+                showToast("已移动到 \(dir.lastPathComponent)")
             } else {
                 try FileManager.default.copyItem(at: src, to: dest)
+                showToast("已复制到 \(dir.lastPathComponent)")
             }
         } catch {
-            // 交由系统重名策略之外的失败静默处理，避免打断用户操作。
+            showToast("操作失败：\(error.localizedDescription)")
         }
     }
 
-    private func uniqueURL(_ url: URL) -> URL {
+    static func uniqueURL(_ url: URL) -> URL {
         let dir = url.deletingLastPathComponent()
         let base = url.deletingPathExtension().lastPathComponent
         let ext = url.pathExtension
@@ -255,12 +296,13 @@ final class AppModel: ObservableObject {
                      dedupKey: key))
     }
 
-    private func addClip(_ item: Item) {
+    /// 插入一条剪贴板记录（内部可见，便于单元测试）。
+    func addClip(_ item: Item) {
         clips.insert(item, at: 0)
         evictIfNeeded()
     }
 
-    private func isLatestKey(_ key: String) -> Bool {
+    func isLatestKey(_ key: String) -> Bool {
         clips.first?.dedupKey == key
     }
 
@@ -269,7 +311,7 @@ final class AppModel: ObservableObject {
     }
 
     /// F10 / 规则 · 容量与淘汰：超出上限时淘汰最旧的非置顶条目。
-    private func evictIfNeeded() {
+    func evictIfNeeded() {
         let nonPinned = clips.filter { !$0.pinned }
         guard nonPinned.count > settings.historyLimit else { return }
         var overflow = nonPinned.count - settings.historyLimit
@@ -288,12 +330,14 @@ final class AppModel: ObservableObject {
         guard let idx = clips.firstIndex(where: { $0.id == item.id }) else { return }
         clips[idx].pinned.toggle()
         persist()
+        showToast(clips[idx].pinned ? "已置顶" : "已取消置顶")
     }
 
     func removeClip(_ item: Item) {
         deleteImageIfNeeded(item)
         clips.removeAll { $0.id == item.id }
         persist()
+        showToast("已移除该记录")
     }
 
     /// F10 · 清空剪贴板历史（含落盘图片）。
@@ -301,9 +345,10 @@ final class AppModel: ObservableObject {
         for item in clips { deleteImageIfNeeded(item) }
         clips.removeAll()
         persist()
+        showToast("已清空剪贴板历史")
     }
 
-    private func deleteImageIfNeeded(_ item: Item) {
+    func deleteImageIfNeeded(_ item: Item) {
         guard item.type == .image else { return }
         try? FileManager.default.removeItem(atPath: item.contentRef)
     }
@@ -316,14 +361,20 @@ final class AppModel: ObservableObject {
         case .text:
             pb.setString(item.contentRef, forType: .string)
         case .image:
-            if let image = NSImage(contentsOfFile: item.contentRef) {
-                pb.writeObjects([image])
+            guard let image = NSImage(contentsOfFile: item.contentRef) else {
+                showToast("图片文件已丢失")
+                return
             }
+            pb.writeObjects([image])
         case .file:
-            guard FileManager.default.fileExists(atPath: item.contentRef) else { return }
+            guard FileManager.default.fileExists(atPath: item.contentRef) else {
+                showToast("原文件已不存在，未写回")
+                return
+            }
             pb.writeObjects([URL(fileURLWithPath: item.contentRef) as NSURL])
         }
         onDidWritePasteboard?()
+        showToast("已复制到剪贴板")
     }
 
     // MARK: - Settings (F11)
@@ -348,6 +399,14 @@ final class AppModel: ObservableObject {
     func setDragOut(_ value: DragOutMode) {
         settings.dragOutMode = value
         persist()
+    }
+
+    func setHotKey(keyCode: Int, modifiers: Int, label: String) {
+        settings.hotkeyKeyCode = keyCode
+        settings.hotkeyModifiers = modifiers
+        settings.hotkeyLabel = label
+        persist()
+        onHotKeyChanged?()
     }
 
     func resetBallPosition() {

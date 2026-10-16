@@ -56,16 +56,22 @@ struct PanelRoot: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        Group {
-            switch model.mode {
-            case .menu: MenuView(model: model)
-            case .shelf: ShelfView(model: model)
-            case .clip: ClipView(model: model)
-            case .settings: SettingsView(model: model)
-            case .collapsed: Color.clear
+        ZStack {
+            Group {
+                switch model.mode {
+                case .menu: MenuView(model: model)
+                case .shelf: ShelfView(model: model)
+                case .clip: ClipView(model: model)
+                case .settings: SettingsView(model: model)
+                case .collapsed: Color.clear
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let preview = model.previewItem {
+                PreviewOverlay(model: model, item: preview)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PanelBackground())
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
@@ -118,6 +124,105 @@ private struct PanelHeader: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Preview overlay (图片大图 / 文本全文)
+
+private struct PreviewOverlay: View {
+    @ObservedObject var model: AppModel
+    let item: Item
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.black.opacity(0.82))
+                .onTapGesture { model.closePreview() }
+
+            VStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.6))
+                    Text(item.name)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .help(item.name)
+                    Spacer(minLength: 0)
+                    if item.type != .text {
+                        IconButton(system: "arrow.up.forward.app") { model.reveal(item) }
+                    }
+                    IconButton(system: "doc.on.doc") { model.copyBack(item) }
+                    IconButton(system: "xmark") { model.closePreview() }
+                }
+
+                content
+
+                Text(item.sizeText)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(12)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if item.type == .text {
+            ScrollView {
+                Text(item.contentRef)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+        } else if let image = NSImage(contentsOfFile: item.contentRef) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+        } else {
+            Text("无法预览该内容，原文件可能已失效")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.5))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+// MARK: - Toast (悬浮球旁瞬时反馈)
+
+struct ToastView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 13))
+                .foregroundColor(accent)
+            Text(model.toast ?? "")
+                .font(.system(size: 12.5))
+                .foregroundColor(.white)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 13)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 11)
+                .fill(Color(red: 0.08, green: 0.10, blue: 0.14, opacity: 0.95))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .padding(3)
     }
 }
 
@@ -301,6 +406,9 @@ private struct ShelfRow: View {
                 IconButton(system: item.pinned ? "star.fill" : "star", active: item.pinned) {
                     model.togglePinShelf(item)
                 }
+                if item.isPreviewable {
+                    IconButton(system: "eye") { model.openPreview(item) }
+                }
                 IconButton(system: "folder") { model.reveal(item) }
                     .disabled(!available)
                 IconButton(system: "xmark") { model.removeShelf(item) }
@@ -464,6 +572,9 @@ private struct ClipRow: View {
             }
             Spacer(minLength: 0)
             HStack(spacing: 4) {
+                if item.isPreviewable {
+                    IconButton(system: "eye") { model.openPreview(item) }
+                }
                 IconButton(system: item.pinned ? "star.fill" : "star", active: item.pinned) {
                     model.togglePinClip(item)
                 }
@@ -481,14 +592,27 @@ private struct ClipRow: View {
         )
         .contentShape(Rectangle())
         .onTapGesture { model.copyBack(item) }
-        .onDrag { NSItemProvider(contentsOf: item.url) ?? NSItemProvider() }
+        .onDrag { dragProvider }
         .contextMenu {
             Button("复制回剪贴板") { model.copyBack(item) }
+            if item.isPreviewable {
+                Button("预览") { model.openPreview(item) }
+            }
             if item.url != nil {
                 Button("打开所在位置") { model.reveal(item) }
             }
             Divider()
             Button("移除") { model.removeClip(item) }
+        }
+    }
+
+    /// 文本型条目也能被拖出（提供字符串）；文件 / 图片提供文件 URL。
+    private var dragProvider: NSItemProvider {
+        switch item.type {
+        case .text:
+            return NSItemProvider(object: item.contentRef as NSString)
+        case .image, .file:
+            return NSItemProvider(contentsOf: item.url) ?? NSItemProvider()
         }
     }
 
@@ -545,7 +669,7 @@ private struct SettingsView: View {
                               binding: Binding(get: { model.settings.monitorClipboard },
                                                set: { model.setMonitor($0) }))
                     settingRow("全局快捷键", "展开 / 收起入口菜单") {
-                        Text("Ctrl + Shift + V")
+                        Text(model.settings.hotkeyLabel)
                             .font(.system(size: 12))
                             .foregroundColor(.white.opacity(0.7))
                     }

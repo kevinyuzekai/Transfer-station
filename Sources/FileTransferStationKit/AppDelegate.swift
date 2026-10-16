@@ -3,14 +3,18 @@ import Carbon.HIToolbox
 import Combine
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+/// 应用委托：负责窗口装配（悬浮球 / 面板 / 反馈气泡）、剪贴板轮询、
+/// 全局快捷键与外部点击收起。对外公开以便可执行入口跨模块引用。
+public final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
 
     private var cancellables = Set<AnyCancellable>()
     private var ballWindow: FloatingPanel!
     private var panelWindow: FloatingPanel!
+    private var toastWindow: FloatingPanel!
     private var ballHost: BallHostingView!
     private var panelHost: NSHostingView<AnyView>!
+    private var toastHost: NSHostingView<AnyView>!
     private var clipTimer: Timer?
     private var lastChangeCount = 0
     private var ignoreChangeCount = -1
@@ -20,8 +24,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var outsideMonitor: Any?
 
     private let ballSize = NSSize(width: 88, height: 88)
+    private let toastSize = NSSize(width: 300, height: 48)
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public override init() { super.init() }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
         model.onDidWritePasteboard = { [weak self] in
@@ -29,19 +36,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.onResetBall = { [weak self] in self?.resetBallPosition() }
         model.onAutoLaunchChange = { [weak self] in self?.applyAutoLaunch() }
+        model.onHotKeyChanged = { [weak self] in self?.registerHotKey() }
 
         setupBallWindow()
         setupPanelWindow()
+        setupToastWindow()
         observeMode()
+        observeToast()
         startClipboardMonitor()
         registerHotKey()
         installOutsideClickMonitor()
         applyAutoLaunch()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {
         clipTimer?.invalidate()
         if let monitor = outsideMonitor { NSEvent.removeMonitor(monitor) }
+        hotKey.unregister()
         model.persist()
     }
 
@@ -102,6 +113,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelWindow = window
     }
 
+    /// 悬浮球旁的瞬时反馈气泡：不接收鼠标事件，仅用于展示操作结果。
+    private func setupToastWindow() {
+        let window = FloatingPanel(contentRect: NSRect(origin: .zero, size: toastSize),
+                                   styleMask: [.borderless, .nonactivatingPanel],
+                                   backing: .buffered,
+                                   defer: false)
+        window.level = .floating
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.hidesOnDeactivate = false
+        window.isReleasedWhenClosed = false
+
+        let host = NSHostingView(rootView: AnyView(ToastView(model: model)))
+        host.frame = NSRect(origin: .zero, size: toastSize)
+        window.contentView = host
+        toastHost = host
+        toastWindow = window
+    }
+
+    private func observeToast() {
+        model.$toast
+            .receive(on: RunLoop.main)
+            .sink { [weak self] text in
+                guard let self = self else { return }
+                if text == nil {
+                    self.toastWindow.orderOut(nil)
+                } else {
+                    self.showToastWindow()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func showToastWindow() {
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let ball = ballWindow.frame
+        var x = ball.minX - toastSize.width - 10
+        if x < visible.minX + 8 { x = ball.maxX + 10 }
+        x = min(max(x, visible.minX + 8), visible.maxX - toastSize.width - 8)
+        let y = min(max(ball.midY - toastSize.height / 2, visible.minY + 8),
+                    visible.maxY - toastSize.height - 8)
+        toastWindow.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: toastSize), display: true)
+        toastWindow.orderFrontRegardless()
+    }
+
     private func defaultBallOrigin() -> NSPoint {
         let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         return NSPoint(x: visible.maxX - ballSize.width - 24, y: visible.minY + 24)
@@ -130,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let window = panelWindow else { return }
         guard mode != .collapsed else {
             window.orderOut(nil)
+            model.previewItem = nil
             return
         }
         let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -210,9 +270,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Hotkey & outside click
 
+    /// 从设置中读取快捷键并注册，设置变更后重新注册。
     private func registerHotKey() {
-        hotKey.register(keyCode: UInt32(kVK_ANSI_V),
-                        modifiers: UInt32(controlKey | shiftKey)) { [weak self] in
+        hotKey.register(keyCode: UInt32(model.settings.hotkeyKeyCode),
+                        modifiers: UInt32(model.settings.hotkeyModifiers)) { [weak self] in
             self?.toggleMenu()
         }
     }

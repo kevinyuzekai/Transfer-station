@@ -48,6 +48,20 @@ struct Item: Identifiable, Codable, Equatable {
         case .file: return "文件"
         }
     }
+
+    /// 是否可打开大图 / 全文预览。
+    var isPreviewable: Bool {
+        switch type {
+        case .image: return FileManager.default.fileExists(atPath: contentRef)
+        case .text: return true
+        case .file: return Self.isImageFile(name)
+        }
+    }
+
+    static func isImageFile(_ name: String) -> Bool {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return ["png", "jpg", "jpeg", "gif", "heic", "tiff", "bmp", "webp"].contains(ext)
+    }
 }
 
 enum DragOutMode: String, Codable {
@@ -62,8 +76,12 @@ struct Settings: Codable, Equatable {
     var autoLaunch: Bool = true
     /// 监听剪贴板，默认开。
     var monitorClipboard: Bool = true
+    /// 全局快捷键：Carbon keyCode（默认 kVK_ANSI_V = 9）。
+    var hotkeyKeyCode: Int = 9
+    /// 全局快捷键：Carbon 修饰键（controlKey 4096 | shiftKey 512）。
+    var hotkeyModifiers: Int = 4608
     /// 全局快捷键展示文案。
-    var hotkeyLabel: String = "Ctrl+Shift+V"
+    var hotkeyLabel: String = "Ctrl + Shift + V"
     /// 拖出默认行为，默认复制。
     var dragOutMode: DragOutMode = .copy
 }

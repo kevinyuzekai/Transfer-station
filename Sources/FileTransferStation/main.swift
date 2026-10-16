@@ -1,4 +1,5 @@
 import AppKit
+import FileTransferStationKit
 
 // Entry point. The app is a borderless "agent" utility (floating ball + panels),
 // so we drive NSApplication directly instead of using the SwiftUI App lifecycle.

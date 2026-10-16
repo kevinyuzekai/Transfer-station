@@ -12,7 +12,7 @@
 - **悬浮球常驻**：启动后显示在主屏右下角，始终悬浮于其他窗口之上，角标实时显示待取用文件数；球体可拖动到任意位置，位置自动记忆。
 - **拖入即存**：把文件（支持多选、文件夹）拖到悬浮球上松手即完成暂存，无需确认框。
 - **只记引用**：中转站只记录原文件的路径引用，不复制实体、不占额外磁盘。
-- **拖出取用**：把条目拖到资源管理器 / 聊天 / 邮件等目标即可投递，默认「复制」；右键可「复制到…」「移动到…」。
+- **拖出取用**：把条目拖到访达 / 聊天 / 邮件等目标即可投递，默认「复制」；右键可「复制到…」「移动到…」。
 - **失效识别**：打开面板、拖出前、应用获得焦点时校验原文件是否仍在；失效条目变灰、禁止拖出，并提供「重新定位」与「移除」。
 - **置顶与清理**：条目可置顶固定；支持单条移除与一键清空（清空不会删除任何原文件）。
 
@@ -20,8 +20,14 @@
 - **自动记录**：后台监听系统剪贴板，自动记录复制过的**文本 / 图片 / 文件**。
 - **去重**：与最新一条相同的内容不重复记录，仅刷新时间。
 - **检索**：按类型（全部 / 文本 / 图片 / 文件）筛选，并按关键词实时搜索文本内容与文件名。
-- **取回**：点击条目即可把内容写回系统剪贴板，随后在原应用直接粘贴。
+- **取回**：点击条目即可把内容写回系统剪贴板，随后在原应用直接粘贴；文本条目也能直接拖到其他应用。
+- **预览**：文本可看全文并可选中复制，图片可看大图。
 - **容量收敛**：默认保留最近 500 条，超出后自动淘汰最旧的非置顶条目；置顶条目不参与淘汰。
+
+### 反馈与外观
+- **即时反馈**：暂存、置顶、移除、复制、清空等操作都会在悬浮球旁弹出瞬时提示，操作结果一目了然。
+- **应用图标**：自带 macOS 风格的圆角渐变图标（由 `assets/AppIcon.png` 构建时生成 `.icns`）。
+- **安装界面**：DMG 带自定义背景图与图标布局，拖入 `Applications` 即是安装。
 
 ### 设置
 | 设置项 | 默认值 | 说明 |
@@ -56,39 +62,45 @@
 - **暂存文件**：从访达（Finder）把文件拖到悬浮球上松手。
 - **取用文件**：点击悬浮球 → 文件中转站 → 把条目拖到目标窗口；或右键选择复制 / 移动到指定文件夹。
 - **找回复制过的内容**：点击悬浮球（或按 `Ctrl+Shift+V`）→ 剪贴板历史 → 点击条目就会写回剪贴板。
+- **查看大图 / 全文**：在条目右侧点「眼睛」按钮，或右键选择「预览」。
 - **收起**：再次点击悬浮球、按快捷键、或点击面板外的任意位置。
 
 ---
 
 ## 从源码构建
 
-需要 macOS 13+ 与 Xcode 命令行工具（Swift 5.9+）。
+需要 macOS 13+ 与 Xcode 命令行工具（Swift 5.9+，含 `sips` / `iconutil`）。
 
 ```bash
 git clone https://github.com/kevinyuzekai/Transfer-station.git
 cd Transfer-station
 
-# 生成 .app（通用二进制）
+# 单元测试
+swift test
+
+# 生成 .app（通用二进制 + 应用图标）
 ./scripts/build-app.sh
 
-# 打包成 DMG
-VERSION=1.0.0 ./scripts/package-dmg.sh
+# 打包成 DMG（自定义背景 + 图标布局）
+VERSION=1.1.0 ./scripts/package-dmg.sh
 ```
 
 产物位于 `dist/`：
 - `dist/FileTransferStation.app`
 - `dist/FileTransferStation-<版本>.dmg`
 
+> DMG 布局依赖 Finder 脚本：若运行环境不支持（例如无图形会话的 CI），脚本会自动回退为默认布局，仍然产出可用的 DMG。
+
 ### 发布流程（GitHub Actions）
 
-推一个 `v*` 标签即可在 GitHub 的 macOS runner 上自动构建并发布 DMG：
+推一个 `v*` 标签即可在 GitHub 的 macOS runner 上自动跑测试、构建并发布 DMG：
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
-工作流会：编译通用二进制 → 组装 `.app` → 打包 DMG → 创建 Release 并上传 DMG。
+工作流会：跑单元测试 → 编译通用二进制 → 组装 `.app`（含图标）→ 打包美化 DMG → 创建 Release 并上传 DMG。
 也可在 Actions 页面手动触发 `workflow_dispatch` 仅生成产物（不发布）。
 
 ---
@@ -96,20 +108,27 @@ git push origin v1.0.0
 ## 项目结构
 
 ```
+Package.swift                    # SwiftPM：Kit 库 + 可执行入口 + 测试目标
 Sources/FileTransferStation/
-  main.swift          # 入口（NSApplication agent 模式）
-  AppDelegate.swift   # 悬浮球 / 面板窗口、剪贴板监听、快捷键、外部点击收起
-  AppModel.swift      # 状态与业务逻辑：中转站、剪贴板历史、设置、持久化
-  Models.swift        # 条目 Item、设置、持久化数据结构
-  Views.swift         # SwiftUI 界面：悬浮球、入口菜单、两块面板、设置
-  DragSupport.swift   # 悬浮球拖入接收（NSDraggingDestination）、面板窗口
-  HotKey.swift        # Carbon 全局快捷键
-  LaunchAtLogin.swift # 开机自启（LaunchAgent）
+  main.swift                     # 入口（NSApplication agent 模式）
+Sources/FileTransferStationKit/
+  AppDelegate.swift              # 悬浮球 / 面板 / 反馈气泡窗口、剪贴板轮询、快捷键、外部点击收起
+  AppModel.swift                 # 状态与业务逻辑：中转站、剪贴板历史、设置、持久化
+  Models.swift                   # 条目 Item、设置、持久化数据结构
+  Views.swift                    # SwiftUI 界面：悬浮球、入口菜单、两块面板、预览、反馈气泡、设置
+  DragSupport.swift              # 悬浮球拖入接收（NSDraggingDestination）、面板窗口
+  HotKey.swift                   # Carbon 全局快捷键（可注销 / 重新注册）
+  LaunchAtLogin.swift            # 开机自启（LaunchAgent）
+Tests/FileTransferStationKitTests/
+  AppModelTests.swift            # 去重、容量淘汰、置顶保护、工具方法
+assets/
+  AppIcon.png                    # 应用图标源图（构建时生成 .icns）
+  dmg-background.png / @2x.png   # DMG 安装界面背景
 scripts/
-  build-app.sh        # 编译 + 组装 .app
-  package-dmg.sh      # 打 DMG
+  build-app.sh                   # 编译 + 图标 + 组装 .app
+  package-dmg.sh                 # 打美化 DMG
 .github/workflows/
-  release.yml         # 构建并发布
+  release.yml                    # 测试 → 构建 → 发布
 ```
 
 数据保存在 `~/Library/Application Support/FileTransferStation/`（`data.json` 与 `images/`）。

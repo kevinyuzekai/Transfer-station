@@ -1,6 +1,7 @@
 .build/
 dist/
 .dmg-stage/
+.dmg-mount/
 *.dmg
 .DS_Store
 .swiftpm/

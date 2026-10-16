@@ -9,6 +9,7 @@ final class HotKeyManager {
     private var handler: (() -> Void)?
 
     func register(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
+        unregister()
         self.handler = handler
 
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -25,5 +26,17 @@ final class HotKeyManager {
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x46545331), id: 1) // 'FTS1'
         RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+    }
+
+    /// 注销已注册的快捷键与事件处理器（重新注册 / 退出前调用）。
+    func unregister() {
+        if let ref = hotKeyRef {
+            _ = UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+        }
+        if let ref = handlerRef {
+            _ = RemoveEventHandler(ref)
+            handlerRef = nil
+        }
     }
 }
